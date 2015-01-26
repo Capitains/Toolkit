@@ -418,13 +418,14 @@ def _install_locally(convert=True, build_dir=True):
         db = env.remote_db
         service_name = env.project_name
 
+    _remove_service(service_name=service_name, local_fn=True)
+    
     with warn_only():
         local("sudo rm -rf {directory}".format(directory=db.directory))
         local("sudo rm -rf {directory}".format(directory=db.data_dir))
 
     db.retrieve()
 
-    _remove_service(service_name=service_name, local_fn=True)
 
     if convert is True:
         convert_cts3(copy=False)
