@@ -131,7 +131,7 @@ declare function ctsx:parseUrn($a_inv as xs:string, $a_urn as xs:string)
     let $namespaceUrn := fn:string-join($components[1,2,3], ":")
     let $groupUrn := $namespaceUrn || ":" || $textgroup
     let $workUrn := $groupUrn || "." || $work
-    let $cat := ctsx:getCapabilities($a_inv, $groupUrn, $workUrn)
+    let $cat := ctsx:getCapabilities($a_inv, $namespaceUrn, $groupUrn, $workUrn)
     let $catwork :=
       $cat//ti:textgroup[@urn eq $groupUrn]/ti:work[@urn eq $workUrn]
     let $version :=
@@ -314,43 +314,87 @@ declare function ctsx:getPassage(
   }
 };
 
+declare function ctsx:simpleUrnParser($a_urn)
+{
+    let $components := fn:tokenize($a_urn, ":")
+    let $namespace := $components[3]
+    let $workComponents := fn:tokenize($components[4], "\.")
+    (: TODO do we need to handle the possibility of a work without a text group? :)
+    let $textgroup := $workComponents[1]
+    let $work := $workComponents[2]
+
+    let $passage := $components[5]
+    let $passageComponents := fn:tokenize($components[5], "-")
+    let $part1 := $passageComponents[1]
+    let $part2 := $passageComponents[2]
+    let $part2 := if (fn:empty($part2)) then $part1 else $part2
+
+    let $namespaceUrn := fn:string-join($components[1,2,3], ":")
+    let $groupUrn := if (fn:exists($textgroup)) then $namespaceUrn || ":" || $textgroup else ()
+    let $workUrn := if(fn:exists($work)) then $groupUrn || "." || $work else ()
+    
+    
+    return
+      element ctsURN
+      {
+        element urn { $a_urn },
+        (: urn without any passage specifics:)
+        element groupUrn { $groupUrn },
+        element workUrn { $workUrn },
+        element namespace{ $namespaceUrn }
+      }
+};
+
+declare function ctsx:text-empty($node) {
+    if (fn:empty($node/text()))
+    then ()
+    else $node
+};
 (:
     CTS getCapabilities request
     Parameters:
         $a_inv - the inventory name
-        $a_groupid - group id (optional)
-        $a_workid - work id (optional) 
+        $a_urn - A urn
     Return Value
         the requested catalog entries
 
     If group and work ids are supplied, only that work will be returned
     otherwise all works in the inventory will be returned
 :)
-declare function ctsx:getCapabilities($a_inv)
+declare function ctsx:getCapabilities($a_inv, $a_urn)
 {
   (: get all works in inventory :)
-  ctsx:getCapabilities($a_inv, (), ())
+  if (fn:exists($a_urn))
+  then
+      let $parsed_urn := ctsx:simpleUrnParser($a_urn)
+      return ctsx:getCapabilities($a_inv, ctsx:text-empty($parsed_urn/namespace), ctsx:text-empty($parsed_urn/groupUrn), ctsx:text-empty($parsed_urn/workUrn))
+  else
+    ctsx:getCapabilities($a_inv, (), (), ())
 };
-declare function ctsx:getCapabilities($a_inv, $a_groupUrn, $a_workUrn)
+declare function ctsx:getCapabilities($a_inv, $a_namespaceUrn, $a_groupUrn, $a_workUrn)
 {
   let $ti := (/ti:TextInventory[@tiid = $a_inv])[1]
+  
   let $groups :=
     (: specified work :)
-    if (fn:exists($a_groupUrn) and fn:exists($a_workUrn))
-    then /ti:textgroup[@tiid eq $a_inv][@urn eq $a_groupUrn]
-    (: else all groups in inventory :)
-    else /ti:textgroup[@tiid eq $a_inv]
+    if (fn:exists($a_groupUrn))
+    then $ti/ti:textgroup[@tiid = $a_inv][@urn = $a_groupUrn]
+    else if (fn:exists($a_namespaceUrn))
+    then $ti/ti:textgroup[@tiid = $a_inv][starts-with(@urn, $a_namespaceUrn)]
+    else $ti/ti:textgroup[@tiid = $a_inv]
+
   let $groupUrns := fn:distinct-values($groups/@urn)
   let $works :=
     (: specified work :)
-    if (fn:exists($a_groupUrn) and fn:exists($a_workUrn))
-    then /ti:work[@groupUrn = $groupUrns][@urn eq $a_workUrn]
+    if (fn:exists($a_workUrn))
+    then $ti//ti:work[@groupUrn = $groupUrns][@urn = $a_workUrn]
     (: all works in inventory :)
-    else /ti:work[@groupUrn = $groupUrns]
+    else $ti//ti:work[@groupUrn = $groupUrns]
 
   return
     element CTS:reply
     {
+      element ti:filter {$a_workUrn},
       element ti:TextInventory
       {
         (:
@@ -359,7 +403,6 @@ declare function ctsx:getCapabilities($a_inv, $a_groupUrn, $a_workUrn)
         attribute tiversion { "5.0.rc.1" },
         :)
         $ti/@*,
-        $ti/*,
         for $group in $groups
         let $groupWorks := $works[@groupUrn eq $group/@urn]
         where fn:count($groupWorks) gt 0
@@ -368,7 +411,6 @@ declare function ctsx:getCapabilities($a_inv, $a_groupUrn, $a_workUrn)
           element ti:textgroup
           {
             $group/@urn,
-            $group/*,
             for $work in $groupWorks
             order by $work/@urn
             return
@@ -1185,7 +1227,7 @@ declare function ctsx:getRights($a_inv, $a_urn) as xs:string*
   let $entry := ctsx:getCatalogEntry(ctsx:parseUrn($a_inv, $a_urn))
 
   return
-    ctsx:getCapabilities($a_inv)
+    ctsx:getCapabilities($a_inv, ())
       //ti:collection[@id = $entry/ti:memberof/@collection]/dc:rights
 };
 

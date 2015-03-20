@@ -62,7 +62,7 @@ let $reply :=
 try
 {
   if ($query = 'getcapabilities')
-  then ctsx:getCapabilities($e_inv)
+  then ctsx:getCapabilities($e_inv, $e_urn)
   else if ($query = 'getvalidreff')
   then ctsx:getValidReff($e_inv, $e_urn, $e_level)
   else if ($query = "getcatalogentry")
