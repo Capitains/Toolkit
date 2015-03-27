@@ -30,6 +30,7 @@ xquery version "3.0";
 :)
 
 module namespace ctsx = "http://alpheios.net/namespaces/cts";
+import module namespace xmldb="http://exist-db.org/xquery/xmldb";
 
 import module namespace cts-utils="http://alpheios.net/namespaces/cts-utils"
        at "cts-utils.xquery";
@@ -59,6 +60,52 @@ declare variable $ctsx:tocChunking :=
 
 declare variable $ctsx:maxPassageNodes := 100;
 declare variable $ctsx:defaultInventory := "alpheios-cts-inventory";
+
+declare %private function local:citationXpath($citation) {
+    
+    let $first := fn:string($citation/@scope)
+    let $last := replace(fn:string($citation/@xpath), "//", "/")
+    
+    let $scope := fn:concat($first, $last)
+    let $xpath := replace($scope,"='\?'",'')
+    return $xpath
+};
+
+declare %private function local:fake-match-document(
+        $level as xs:integer, (: Level at which we are currently :)
+        $citations as element()*, (: List of citations :)
+        $body, (: Body/Context to which we should make xpath :)
+        $urn as xs:string, (: Urn of the document :)
+        $parents as xs:string*, (: Parents N identifier :)
+        $remove as xs:string? (: String to remove from xpath as its parent related path :)
+    ) {
+        let $citation := $citations[1]
+        let $xpath := local:citationXpath($citation)
+        let $masterPath := 
+            if ($remove)
+            then replace($xpath, "^("||replace($remove, '(\.|\[|\]|\\|\||\-|\^|\$|\?|\*|\+|\{|\}|\(|\))','\\$1')||")", "")
+            else $xpath
+        let $masters := util:eval("$body/" || $masterPath, true())
+        let $next := subsequence($citations, 2)
+        let $nextLevel := $level + 1
+    
+    return 
+            for $master in $masters 
+             let $childs := 
+                if( count($next) = 0)
+                then
+                    ()
+                else
+                    local:fake-match-document($nextLevel, $next, $master, $urn, ($parents, string($master/@n)), $xpath)
+                    
+             return (
+              element urn {
+                 attribute level { $level },
+                 $urn || ":" || string-join(($parents, string($master/@n)), ".")
+              },
+              $childs
+             )
+};
 
 (: for backwards compatibility default to alpheios inventory :)
 declare function ctsx:parseUrn($a_urn as xs:string)
@@ -131,7 +178,7 @@ declare function ctsx:parseUrn($a_inv as xs:string, $a_urn as xs:string)
     let $namespaceUrn := fn:string-join($components[1,2,3], ":")
     let $groupUrn := $namespaceUrn || ":" || $textgroup
     let $workUrn := $groupUrn || "." || $work
-    let $cat := ctsx:getCapabilities($a_inv, $groupUrn, $workUrn)
+    let $cat := ctsx:getCapabilities($a_inv, $namespaceUrn, $groupUrn, $workUrn)
     let $catwork :=
       $cat//ti:textgroup[@urn eq $groupUrn]/ti:work[@urn eq $workUrn]
     let $version :=
@@ -274,26 +321,6 @@ declare %private function ctsx:_parseRangePart($part1)
     }
 };
 
-(: function to retrieve a subreference from a document
-    Parameters:
-        $a_urn: the CTS URN
-    Return Value:
-        <reply>
-            <TEI>
-                [the referenced element]
-            </TEI>
-          </reply>
-:)
-
-declare function ctsx:findSubRef($a_passage,$a_subref)
-{
-  if ($a_passage//wd)
-  then
-    $a_passage//wd[. = $a_subref][$a_subref/@position][1]
-  else
-    $a_passage//tei:wd[. = $a_subref][$a_subref/@position][1]
-};
-
 (:
     get a passage from a text
     Parameters:
@@ -314,43 +341,87 @@ declare function ctsx:getPassage(
   }
 };
 
+declare function ctsx:simpleUrnParser($a_urn)
+{
+    let $components := fn:tokenize($a_urn, ":")
+    let $namespace := $components[3]
+    let $workComponents := fn:tokenize($components[4], "\.")
+    (: TODO do we need to handle the possibility of a work without a text group? :)
+    let $textgroup := $workComponents[1]
+    let $work := $workComponents[2]
+
+    let $passage := $components[5]
+    let $passageComponents := fn:tokenize($components[5], "-")
+    let $part1 := $passageComponents[1]
+    let $part2 := $passageComponents[2]
+    let $part2 := if (fn:empty($part2)) then $part1 else $part2
+
+    let $namespaceUrn := fn:string-join($components[1,2,3], ":")
+    let $groupUrn := if (fn:exists($textgroup)) then $namespaceUrn || ":" || $textgroup else ()
+    let $workUrn := if(fn:exists($work)) then $groupUrn || "." || $work else ()
+    
+    
+    return
+      element ctsURN
+      {
+        element urn { $a_urn },
+        (: urn without any passage specifics:)
+        element groupUrn { $groupUrn },
+        element workUrn { $workUrn },
+        element namespace{ $namespaceUrn }
+      }
+};
+
+declare function ctsx:text-empty($node) {
+    if (fn:empty($node/text()))
+    then ()
+    else $node
+};
 (:
     CTS getCapabilities request
     Parameters:
         $a_inv - the inventory name
-        $a_groupid - group id (optional)
-        $a_workid - work id (optional) 
+        $a_urn - A urn
     Return Value
         the requested catalog entries
 
     If group and work ids are supplied, only that work will be returned
     otherwise all works in the inventory will be returned
 :)
-declare function ctsx:getCapabilities($a_inv)
+declare function ctsx:getCapabilities($a_inv, $a_urn)
 {
   (: get all works in inventory :)
-  ctsx:getCapabilities($a_inv, (), ())
+  if (fn:exists($a_urn))
+  then
+      let $parsed_urn := ctsx:simpleUrnParser($a_urn)
+      return ctsx:getCapabilities($a_inv, ctsx:text-empty($parsed_urn/namespace), ctsx:text-empty($parsed_urn/groupUrn), ctsx:text-empty($parsed_urn/workUrn))
+  else
+    ctsx:getCapabilities($a_inv, (), (), ())
 };
-declare function ctsx:getCapabilities($a_inv, $a_groupUrn, $a_workUrn)
+declare function ctsx:getCapabilities($a_inv, $a_namespaceUrn, $a_groupUrn, $a_workUrn)
 {
   let $ti := (/ti:TextInventory[@tiid = $a_inv])[1]
+  
   let $groups :=
     (: specified work :)
-    if (fn:exists($a_groupUrn) and fn:exists($a_workUrn))
-    then /ti:textgroup[@tiid eq $a_inv][@urn eq $a_groupUrn]
-    (: else all groups in inventory :)
-    else /ti:textgroup[@tiid eq $a_inv]
+    if (fn:exists($a_groupUrn))
+    then $ti/ti:textgroup[@tiid = $a_inv][@urn = $a_groupUrn]
+    else if (fn:exists($a_namespaceUrn))
+    then $ti/ti:textgroup[@tiid = $a_inv][starts-with(@urn, $a_namespaceUrn)]
+    else $ti/ti:textgroup[@tiid = $a_inv]
+
   let $groupUrns := fn:distinct-values($groups/@urn)
   let $works :=
     (: specified work :)
-    if (fn:exists($a_groupUrn) and fn:exists($a_workUrn))
-    then /ti:work[@groupUrn = $groupUrns][@urn eq $a_workUrn]
+    if (fn:exists($a_workUrn))
+    then $ti//ti:work[@groupUrn = $groupUrns][@urn = $a_workUrn]
     (: all works in inventory :)
-    else /ti:work[@groupUrn = $groupUrns]
+    else $ti//ti:work[@groupUrn = $groupUrns]
 
   return
     element CTS:reply
     {
+      element ti:filter {$a_workUrn},
       element ti:TextInventory
       {
         (:
@@ -359,7 +430,6 @@ declare function ctsx:getCapabilities($a_inv, $a_groupUrn, $a_workUrn)
         attribute tiversion { "5.0.rc.1" },
         :)
         $ti/@*,
-        $ti/*,
         for $group in $groups
         let $groupWorks := $works[@groupUrn eq $group/@urn]
         where fn:count($groupWorks) gt 0
@@ -368,7 +438,6 @@ declare function ctsx:getCapabilities($a_inv, $a_groupUrn, $a_workUrn)
           element ti:textgroup
           {
             $group/@urn,
-            $group/*,
             for $work in $groupWorks
             order by $work/@urn
             return
@@ -418,6 +487,7 @@ declare function ctsx:getValidReff($a_inv, $a_urn) as element(CTS:reply)
       else fn:count($entry/ti:online//ti:citation)
     )
 };
+
 declare function ctsx:getValidReff(
   $a_inv as xs:string,
   $a_urn as xs:string,
@@ -426,7 +496,9 @@ declare function ctsx:getValidReff(
 {
   element CTS:reply
   {
-    element CTS:reff { ctsx:getValidUrns($a_inv, $a_urn, $a_level) }
+    element CTS:reff { 
+        ctsx:getValidUrns($a_inv, $a_urn, $a_level) 
+    }
   }
 };
 
@@ -453,236 +525,99 @@ declare function ctsx:getValidUrns(
   $a_level as xs:int
 ) as element(CTS:urn)*
 {
+    ctsx:getValidUrns($a_inv, $a_urn, $a_level, true())
+};
+
+declare function ctsx:getValidUrns(
+  $a_inv as xs:string,
+  $a_urn as xs:string,
+  $a_level as xs:int,
+  $remodel as xs:boolean
+) as element(CTS:urn)*
+{
   let $cts := ctsx:parseUrn($a_inv, $a_urn)
   let $startVals := $cts/passageParts/rangePart[1]/part[1 to $a_level]/fn:string()
   let $endVals := $cts/passageParts/rangePart[2]/part[1 to $a_level]/fn:string()
 
   let $entry := ctsx:getCatalogEntry($cts)
-  let $cites := fn:subsequence($entry/ti:online//ti:citation, 1, $a_level)
-  let $scope := $cites[1]/@scope
-  (: get paths without equality test :)
-  let $steps := $cites/@xpath/fn:replace(., "^(.*\[.*@[^=]+)=.\?.+(\].*)$", "$1$2")
-  (: get attributes from steps :)
-  let $ids := $steps!fn:replace(., "^.*\[.*(@[^=])\].*$", "$1")
+  let $cites := $entry/ti:online//ti:citation
+  let $citations := subsequence($cites, 1, $a_level)
   let $doc := fn:doc($cts/fileInfo/fullPath)
-
-  return
-    ctsx:_getUrns(
-      util:eval("$doc" || $scope),
-      $cts/versionUrn || ":",
-      "",
-      $steps,
-      $ids,
-      $startVals,
-      $endVals
-    ) ! element CTS:urn { . }
-};
-
-(:
-    CTS getUrnMatchString
-    Parameters:
-        $a_inv the inventory name
-        $a_urn the passage urn
-    Returns
-        a regex to match on
-:)
-declare function ctsx:getUrnMatchString($a_inv,$a_urn) as xs:string
-{
-  let $cts := ctsx:parseUrn($a_inv, $a_urn)
-  let $entry := ctsx:getCatalogEntry($cts)
-  let $parts := fn:count(($cts/passageParts/rangePart[1])/part)
-  (: get the level from the range specified :)
-  let $level :=
-    if ($parts) then $parts else fn:count($entry/ti:online//ti:citation)
-  let $urns :=
-    for $u in ctsx:getValidUrns($a_inv, $a_urn, $level)
-    return
-    (
-      '(' ||
-      fn:replace($u, "\.", "\\.") ||
-      '(:|\.|-))'
+  let $urns := local:use-fake-document-cache(
+        1, (: Level at which we are currently :)
+        $cites, (: List of citations :)
+        $doc, (: Body/Context to which we should make xpath :)
+        xs:string($cts//versionUrn/text()), (: Urn of the document :)
+        (), (: Parents N identifier :)
+        () (: String to remove from xpath as its parent related path :)
     )
-
-  return ('^' || fn:string-join($urns, "|"))
-};
-
-(:
-    CTS getMatchingUrns
-    Parameters:
-        $a_inv the inventory name
-        $a_urn the passage urn
-    Returns
-        a list of urns for matching
-:)
-declare function ctsx:getUrnMatches($a_inv,$a_urn)
-{
-  let $cts := ctsx:parseUrn($a_inv,$a_urn)
-  let $entry := ctsx:getCatalogEntry($cts)
-  let $parts := fn:count($cts/passageParts/rangePart[1]/part)
-  (: get the level from the range specified :)
-  let $level :=
-    if ($parts)
-    then $parts
-    else fn:count($entry/ti:online//ti:citation)
-  for $u in ctsx:getValidUrns($a_inv, $a_urn, $level)
-  return
-  (
-    '(' ||
-    fn:replace($u, "\.", "\\.") ||
-    '(:|\.))'
-  )
-};
-
-(:
-        Recursive function to expands the urns returned by getValidUrns into a TEI-compliant list,
-        starting at the supplied level, with the node containing the supplied urn expanded to the level
-        of the requested urn
-        Parameters:
-            $a_inv the inventory name
-            $a_urn the requested urn
-            $a_level the starting level
-         Returns the hierarchy of references as a TEI-compliant <list/>
-:)
-declare function ctsx:expandValidReffs($a_inv as xs:string,$a_urn as xs:string,$a_level as xs:int)
-{
-    (: TODO address situation where lines are missing ? e.g. line 9.458 Iliad :)
-    let $cts := ctsx:parseUrn($a_inv,$a_urn)
-    let $entry := ctsx:getCatalogEntry($cts)
-    let $versionUrn := if ($a_level = 1) then $cts/versionUrn else $a_urn
-    let $urns := ctsx:getValidUrns($a_inv,$versionUrn,$a_level)
-    let $numLevels := fn:count($entry/ti:online//ti:citation)
-    let $numUrns := fn:count($urns)
-    let $tocName := ($entry/ti:online//ti:citation)[$a_level]/@label
-    let $chunkSize := ctsx:getTocSize($tocName)
-    return
-                <list> {
-                for $i in (1 to $numUrns)
-                    return
-                    if (($i + $chunkSize - 1) mod $chunkSize != 0)
-                    then ()
-                    else
-                        let $u := $urns[$i]
-                        let $focus := $u eq $a_urn
-                        let $last :=
-                          if ($chunkSize > 1)
-                          then
-                            if ($urns[($i + $chunkSize - 1)])
-                            then $urns[($i + $chunkSize - 1)]
-                            else $urns[fn:last()]
-                          else()
-                        let $parsed :=  ctsx:parseUrn($a_inv,$u)
-                        let $endParsed := if ($last) then ctsx:parseUrn($a_inv,$last) else ()
-                        let $startPart := $parsed/passageParts/rangePart[1]/part[last()]
-                        let $endPart := if ($endParsed) then concat("-",$endParsed/passageParts/rangePart[1]/part[last()]) else ""
-                        let $urn :=
-                            if ($last)
-                            then
-                                concat(
-                                    $parsed/versionUrn,":",
-                                    string-join($parsed/passageParts/rangePart[1]/part,"."),"-",
-                                    string-join($endParsed/passageParts/rangePart[1]/part,"."))
-                            else
-                                $u
-                        let $href :=
-                            if ($a_level = $numLevels)
-                            then
-                                concat("alpheios-get-ref.xq?inv=",$a_inv,"&amp;urn=",$urn)
-                            else
-                                 concat("alpheios-get-toc.xq?inv=",$a_inv,"&amp;urn=",$urn,"&amp;level=",$a_level+1)
-                        let $ptrType := if ($a_level = $numLevels) then 'text' else 'toc'
-                        return
-                          <item>
-                            { $tocName || " " || $startPart || $endPart }
-                            <tei:ptr target="{ $href }" xmlns:tei="http://www.tei-c.org/ns/1.0" rend="{$ptrType}"/>
-                            {
-                              if (fn:not($focus) and 
-                                  fn:contains($a_urn, $u) and
-                                  fn:exists(($entry/ti:online//ti:citation)[$a_level + 1])
-                                 )
-                              then ctsx:expandValidReffs($a_inv,$u,$a_level + 1)
-                              else ()
-                            }
-                            </item>
-                }</list>
-};
-
-(:
-    find the next/previous urns
-    Parameters:
-        $a_dir direction ('p' for previous, 'n' for next)
-        $a_node the node from which to start
-        $a_path the xpath template for the referenced passage
-        $a_count the number of nodes in the referenced passage
-        $a_urn the work urn
-        $a_passageParts the passageParts elementes from the parsed urn (see ctsx:parseUrn)
-    Return Value:
-        the urn of the the next or previous reference
-        if the referenced passage was a range, the urn will be a range of no more than the number of nodes
-        in the referenced range
-:)
-declare function ctsx:findNextPrev(
-  $a_dir as xs:string,
-  $a_node as node(),
-  $a_path as xs:string ,
-  $a_count as xs:int ,
-  $a_urn as xs:string,
-  $a_passageParts as node()*
-) as xs:string
-{
-  let $kind := xs:string(node-name($a_node))
-  let $name := replace($a_path,"^/(.*?)\[.*$","$1")
-  let $pred := replace($a_path,"^.*?\[(.*?)\].*$","$1")
-  (: remove the identifier bind variable from the path :)
-  let $path := replace($pred,"@[^=]+=.\?.(\s+(and)|(or))?","")
-  (: get the identifier bind variable :)
-  let $id := replace($pred,"^.*?@([^=]+)=.\?.+$","$1")
-  let $next :=
-    if ($path)
-    then
-      (: apply additional non-id predicates in xpath :)
-      (: TODO check the context of the util:eval($path) here :)
-      if ($a_dir = xs:string('p'))
+  
+  return 
+      if ($remodel)
       then
-        util:eval(concat("$a_node/preceding-sibling::*[name() = $kind and ",$path,"][1]"))
+          for $urn in $urns[@level = $a_level]
+            return element CTS:urn {
+                $urn/@urn,
+                $urn/text()
+            }
       else
-        util:eval(concat("$a_node/following-sibling::*[name() = $kind and ",$path,"][1]"))
-    else if ($a_dir = xs:string('p'))
-    then
-      $a_node/preceding-sibling::*[name() = $kind]
-    else
-      $a_node/following-sibling::*[name() = $kind]
-  return
-    if ($next)
-    then
-      let $end :=
-        if (fn:count($next) > $a_count)
-        then $a_count
-        else fn:count($next)
-      let $passagePrefix :=
-        if (fn:count($a_passageParts) > 1)
-        then
-          fn:concat(
-            fn:string-join(
-              fn:subsequence(
-                $a_passageParts,
-                1,
-                fn:count($a_passageParts) - 1
-              ),
-              "."
-            ),
-            "."
-          )
-        else ""
-      let $rangeStart := concat($passagePrefix,xs:string($next[1]/@*[name() = $id]))
-      let $rangeEnd :=
-        if ($end > 1)
-        then concat("-",$passagePrefix,xs:string($next[$end]/@*[name() = $id]))
-        else ""
-      return concat($a_urn,":",$rangeStart,$rangeEnd)
-    (:TODO recurse up the path to find the next node of this kind in the next parent node :)
-    else ""
+          $urns[@level = $a_level]
 };
 
+
+declare %private function local:use-fake-document-cache(
+    $level as xs:integer, (: Level at which we are currently :)
+    $citations as element()*, (: List of citations :)
+    $body, (: Body/Context to which we should make xpath :)
+    $urn as xs:string, (: Urn of the document :)
+    $parents as xs:string*, (: Parents N identifier :)
+    $remove as xs:string? (: String to remove from xpath as its parent related path :)
+) {
+    
+    (: this logs you in; you can also get these variables from your session variables :)
+    let $safeUrn := replace($urn, ":", "_")
+    let $collection := '/db/urns-cache/' || $safeUrn
+    (: replace this with a unique file name with a sequence number :)
+    let $docHash := util:hash($body, "md5")
+    let $filename :=  $docHash || ".xml" 
+    let $doc := doc($collection || "/" || $filename)//urn
+    return
+        if ($doc)
+        then $doc
+        else
+            let $response := local:fake-match-document(
+                                $level,
+                                $citations,
+                                $body,
+                                $urn,
+                                $parents,
+                                $remove
+                            )
+            let $store-return-status := (
+                    xmldb:login('/db', 'admin', 'password'),
+                    xmldb:create-collection('/db/urns-cache/', $safeUrn),
+                    xmldb:store($collection, $filename, element reff { $response } )
+                )
+            return $response
+};
+
+
+(: 
+ : Merge Urns takes a tuple of urn and transform it into one urn
+ : Nullable
+ :)
+declare %private function ctsx:mergeUrns($reff) {
+  if (count($reff) = 0)
+  then
+      ()
+  else
+      if ($reff[1] = $reff[2])
+      then
+          $reff[1]
+      else
+          let $e := tokenize($reff[2], ":")[5]
+          return $reff[1] || "-"  || $e
+};
 (:
     CTS getPassagePlus request, returns the requested passage plus previous/next references
     Parameters:
@@ -727,128 +662,112 @@ declare function ctsx:getPassagePlus(
   $a_withSiblings as xs:boolean*
 )
 {
-  let $cts := ctsx:parseUrn($a_inv, $a_urn)
-  let $doc := fn:doc($cts/fileInfo/fullPath)
+  let $passageInfos := ctsx:preparePassage($a_inv, $a_urn)
+  let $doc := $passageInfos[1]
+  let $xpath1 := $passageInfos[2]
+  let $xpath2 := $passageInfos[3]
+  let $cts := $passageInfos[4]
+  let $entry := $passageInfos[4]
+  let $cite := $passageInfos[4]
+  
   let $level := fn:count($cts/passageParts/rangePart[1]/part)
-  let $entry := ctsx:getCatalogEntry($cts)
-  let $tocName := ($entry/ti:online//ti:citation)[$level]/@label
-  let $chunkSize := ctsx:getTocSize($tocName)
-
-  let $cites := $entry/ti:online//ti:citation
-  let $xpath :=
-    ctsx:replaceBindVariables(
-      $cts/passageParts/rangePart[1]/part,
-      $cts/passageParts/rangePart[2]/part,
-      $cites[1]/@scope,
-      fn:subsequence($cites, 1, $level)/@xpath
-    )
-  let $passage_orig :=
-    (: return error if we can't determine the chunk size :)
-    if (fn:not($chunkSize))
-    then <l rend="error">Invalid Request</l>
-    else util:eval("$doc" || $xpath)
-  let $subref_orig :=
-    if ($cts/subRef)
-    then ctsx:findSubRef($passage_orig,$cts/subRef)
+  
+  let $passageFull := <container>{ctsx:_extractPassageLoop($passageInfos)}</container>
+  let $passage := $passageFull//*:body
+  
+  let $count := count($cts/passageParts/rangePart[1]/part)
+  let $reffs := ctsx:getValidUrns($a_inv, $cts/versionUrn, $count, false())
+  
+  let $startUrn   := $cts/versionUrn || ":" || fn:string-join($cts/passageParts/rangePart[1]/part, ".")
+  let $startReff  := $reffs[./text() = $startUrn]
+  let $startIndex := index-of($reffs, $startReff)
+  
+  let $endReff := 
+    if (count($cts/passageParts/rangePart[2]/part) = $count)
+    then 
+      let $endUrn := $cts/versionUrn || ":" || fn:string-join($cts/passageParts/rangePart[2]/part, ".")
+      return $reffs[./text() = $endUrn]
     else ()
-  let $passage :=
-    if ($passage_orig and
-        (fn:not($cts/subRef) or ($cts/subRef and $subref_orig)))
-    then $passage_orig
-    else
-      let $parent_match :=
-        fn:concat("^",$cts/passageParts/rangePart[1]/part[2],"-")
-      let $passage_alt :=
-        $doc//div1[@n = $cts/passageParts/rangePart[1]/part[1]]
-            //wd[matches(@tbrefs,$parent_match) or matches(@tbref,$parent_match)][1]
-            /..
-      return
-        if ($passage_alt) then $passage_alt else $passage_orig
-  (: try again to get the subref :)
-  let $subref :=
-    if ($subref_orig)
-    then $subref_orig
-    else
-      if ($passage and $cts/subRef and fn:not($subref_orig))
-      then ctsx:findSubRef($passage,$cts/subRef)
-      else ()
-  let $countAll := count($passage)
-  let $lang := if ($passage) then ctsx:getLang($passage[1]) else ""
-  (: enforce limit on # of nodes returned to avoid crashing the server or browser :)
-  (:let $count := if ($countAll > $ctsx:maxPassageNodes) then $ctsx:maxPassageNodes else $countAll:)
-  let $count := $countAll
-  let $name := xs:string(node-name($passage[1]))
-  let $thisPath := xs:string($cites[last()]/@xpath)
-  let $docid :=
-    if ($doc/TEI.2/@id)
-    then $doc/TEI.2/@id
-    else if ($doc/tei.2/@id)
-    then $doc/tei.2/@id
-    else if ($doc/TEI/@id)
-    then $doc/TEI/@id
-    else ""
-  let $passageAll :=
-    if ($a_withSiblings)
-    then
-      for $item in fn:subsequence($passage, 1, $count)
-      return
-      (
-        $item/preceding-sibling::*[1][local-name(.) != local-name($item)],
-        $item,
-        $item/following-sibling::*[1][local-name(.) != local-name($item)]
-      )
-    else fn:subsequence($passage, 1, $count)
+
+   let $endIndex :=
+      if ($endReff)
+      then
+          index-of($reffs, $endReff)
+      else
+          $endReff
+        
+    
+    let $refCount := $endIndex - $startIndex + 1
+    
+    let $prevMinusRef := 
+        if ($startIndex - $refCount <= 1)
+        then
+            1
+        else
+            $startIndex - $refCount
+            
+    let $countUrns := count($reffs)
+    let $nextEndRef := 
+        if ($endIndex + $refCount >= $countUrns)
+        then
+            $countUrns
+        else
+            $endIndex + $refCount
+            
+    let $prevFirstUrn :=
+        if ($prevMinusRef <= 1 and $startIndex = 1)
+        then
+            ()
+        else
+            let $s := $reffs[$prevMinusRef]/text()
+            let $e :=
+                if($prevMinusRef + $refCount >= $startIndex)
+                then
+                    $reffs[$startIndex - 1]/text()
+                else
+                    $reffs[$prevMinusRef + $refCount]/text()
+                    
+            return ($s, $e)
+            
+    let $nextFirstUrn :=
+        if ($endIndex >= $countUrns)
+        then
+            ()
+        else
+            let $s := $reffs[$endIndex + 1]/text()
+            let $e := $reffs[$nextEndRef]/text()
+                    
+            return ($s, $e)
+            
+    let $prev := ctsx:mergeUrns($prevFirstUrn)
+    let $next := ctsx:mergeUrns($nextFirstUrn)
+  
   return
-    <reply xpath="{string($xpath)}">
-      <TEI id="{$docid}">
-      {
-        $doc//*:teiHeader,$doc//*:teiheader
-      }
-        <text xml:lang="{$lang}">
-          <body>
+    <reply>
+      <TEI>
           {
-            for $p in $passageAll
-            return
-              ctsx:passageWithParents(
-                $p,
-                1,
-                ('body','TEI.2','TEI','tei.2','tei')
-              )
+            $doc//*:teiHeader,$doc//*:teiheader
           }
-          </body>
+        <text>
+          {$passage}
         </text>
       </TEI>
       {
-        if ($chunkSize and $passage)
+        if ($passage)
         then
           element CTS:prevnext
           {
             element CTS:prev
             {
-              ctsx:findNextPrev(
-                "p",
-                $passage[1],
-                $thisPath,
-                $count,
-                $cts/versionUrn,
-                $cts/passageParts/rangePart[1]/part
-              )
+              $prev
             },
             element CTS:next
             {
-              ctsx:findNextPrev(
-                "n",
-                $passage[fn:last()],
-                $thisPath,
-                $count,
-                $cts/versionUrn,
-                $cts/passageParts/rangePart[fn:last()]/part
-              )
+              $next
             }
           }
         else ()
-      },
-      <subref>{$subref}</subref>
+      }
     </reply>
 };
 
@@ -890,20 +809,12 @@ declare %private function ctsx:_rbv(
       let $startRange :=
         if ($a_start/text())
         then
-          if (fn:matches($a_start, '^\d+$'))
-          then
-            ' >= ' || $a_start
-          else
-            ' >= "' || $a_start || '"'
+          ' = "' || $a_start || '"'
         else ""
       let $endRange :=
         if ($a_end/text())
         then
-          if (fn:matches($a_end, '^\d+$'))
-          then
-            ' <= ' || $a_end
-          else
-            ' <= "' || $a_end || '"'
+          ' = "' || $a_end || '"'
         else ""
       return
         fn:replace(
@@ -952,7 +863,11 @@ declare function ctsx:replaceBindVariables(
   )
 };
 
-declare %private function ctsx:_rbv($a_part, $a_path) as xs:string
+declare %private function ctsx:_rbv
+(
+  $a_part, 
+  $a_path
+) as xs:string
 {
   if (fn:empty($a_part)) then $a_path else
 
@@ -995,209 +910,6 @@ declare function ctsx:getCatalogEntry($a_cts) as node()*
 };
 
 (:
-    Get the document for the supplied urn
-    Parameters
-        $a_urn the urn
-        $a_inv the inventory
-    Return Value
-        the document
-:)
-declare function ctsx:getDoc($a_urn as xs:string,$a_inv as xs:string)
-{
-  fn:doc(ctsx:parseUrn($a_inv, $a_urn)/fileInfo/fullPath)
-};
-
-(:
-    Get the title of the edition represented by the supplied urn
-    Parameters
-        $a_inv the text inventory
-        $a_urn the urn
-    Return Value
-        the title
-:)
-declare function ctsx:getVersionTitle(
-  $a_inv as xs:string,
-  $a_urn as xs:string
-) as xs:string?
-{
-  ctsx:getCatalogEntry(ctsx:parseUrn($a_inv, $a_urn))
-    //(ti:edition|ti:translation)/ti:label
-};
-
-(:
-    Get the full title of the supplied urn
-    Parameters
-        $a_inv the text inventory
-        $a_urn the urn
-    Return Value
-        the title
-:)
-declare function ctsx:getExpandedTitle(
-  $a_inv as xs:string,
-  $a_urn as xs:string
-) as element(CTS:reply)
-{
-  let $cts := ctsx:parseUrn($a_inv,$a_urn)
-  let $entry := ctsx:getCatalogEntry($cts)
-  let $labels := $entry/ti:online//ti:citation/@label
-  let $parts :=
-    for $rangePart in $cts/passageParts/rangePart
-    let $base :=
-      fn:string-join(
-        for $part at $i in $rangePart/part
-        return $labels[$i] || " " || $part,
-        " "
-      )
-    return
-      if (fn:exists($rangePart/subRef))
-      then
-        $base ||
-        " @" ||
-        $rangePart/subRef ||
-        "[" ||
-        $rangePart/subRef/@position ||
-        "]"
-      else $base
-  let $range :=
-    if ($parts[1] ne $parts[2])
-    then $parts[1] || " - " || $parts[2]
-    else $parts[1]
-  return
-    element CTS:reply { $entry//ti:label || " " || $range }
-};
-
-declare function ctsx:getCitableText(
-  $a_inv as xs:string,
-  $a_urn as xs:string
-) as node()
-{
-  let $cts := ctsx:parseUrn($a_inv,$a_urn)
-  (:
-  let $urns := ctsx:getValidUrns($a_inv,$textUrn/versionUrn)
-  let $first := $urns[1]
-  let $last := $urns[fn:last()]
-  let $firstCts := ctsx:parseUrn($first)
-  let $lastCts := ctsx:parseUrn($last)
-  let $urn :=
-    fn:concat(
-      $firstCts/versionUrn,
-      ':',
-      fn:string-join($firstCts/passageParts/rangePart/part, '.'),
-      '-',
-      fn:string-join($lastCts/passageParts/rangePart/part,'.')
-    )
-  return ctsx:getPassagePlus($a_inv,$urn)
-  :)
-  return
-  <CTS:reply>
-     { fn:doc($cts/fileInfo/fullPath) }
-  </CTS:reply>
-};
-
-declare function ctsx:passageWithParents($a_passage as node()*, $a_pos as xs:int, $a_stop) as node()*
-{
-  let $ancestor := $a_passage[1]/ancestor::*[$a_pos]
-  return
-    if ($ancestor)
-    then
-      let $in_stop :=
-        for $elem in $a_stop
-        return if (local-name($ancestor) = $elem) then true() else ()
-      return
-        if ($in_stop)
-        then
-          $a_passage
-        else
-          element {name($ancestor)}
-          {
-            $ancestor/@*,
-            ctsx:passageWithParents($a_passage, $a_pos + 1, $a_stop)
-          }
-    else
-      $a_passage
-
-};
-
-declare function ctsx:getLang($a_node as node()*) as xs:string*
-{
-    let $lang := $a_node/@*[local-name(.) = 'lang']
-    return
-        if ($lang)
-        then $lang
-        else if ($a_node and $a_node/..)
-        then ctsx:getLang($a_node/..)
-        else ""
-};
-
-(:
-    Build up a CTS urn for a given node
-:)
-declare function ctsx:getUrnForNode($a_inv as xs:string, $a_cts as node(), $a_node as node(),$a_topParent as xs:string, $a_build as xs:string*) as xs:string
-{
-    (: TODO get the correct xpath element and attribute to use from the parsed urn :)
-  if (local-name($a_node) = $a_topParent)
-  then
-     let $path := reverse($a_build)
-     let $cleaned := for $p in $path return if ($p) then $p else ()
-       return concat($a_cts/versionUrn,':',string-join($cleaned,'.'))
-  else if (ctsx:isCitationNode($a_inv,$a_cts/versionUrn,$a_node))
-  then
-          let $new_build := if ($a_node/@n) then
-                if (count($a_build) > 0)
-                then ($a_build,xs:string($a_node/@n))
-                else xs:string($a_node/@n)
-            else $a_build
-        return ctsx:getUrnForNode($a_inv, $a_cts,$a_node/parent::*,$a_topParent,$new_build)
-  else
-    ctsx:getUrnForNode($a_inv,$a_cts,$a_node/parent::*,$a_topParent,$a_build)
-};
-
-declare function ctsx:isCitationNode(
-  $a_inv as xs:string,
-  $a_urn as xs:string,
-  $a_node as node()
-) as xs:boolean
-{
-  let $entry := ctsx:getCatalogEntry(ctsx:parseUrn($a_inv, $a_urn))
-  let $matched :=
-    for $i in $entry/ti:online//ti:citation
-    let $path := fn:replace($i/@xpath, "='\?'", "")
-    (: todo this doesn't work for namespaces because it doesn't take prefixes in the xpath into account :)
-    return
-      if (fn:local-name($a_node) eq
-          fn:replace(fn:substring-before($path, "["), "^[/]*/+", ""))
-      then
-        util:eval("$a_node/parent::*" || $path)
-      else ()
-  return fn:count($matched) > 0
-};
-
-declare function ctsx:isUnderCopyright($a_inv,$a_urn) as xs:boolean
-{
-  let $rights := ctsx:getRights($a_inv, $a_urn)
-
-  (: TODO need a better way of identifying copyright than match on specific string here :)
-  return $rights!fn:matches(., "under copyright", "i") = fn:true()
-};
-
-declare function ctsx:getRights($a_inv, $a_urn) as xs:string*
-{
-  let $entry := ctsx:getCatalogEntry(ctsx:parseUrn($a_inv, $a_urn))
-
-  return
-    ctsx:getCapabilities($a_inv)
-      //ti:collection[@id = $entry/ti:memberof/@collection]/dc:rights
-};
-
-(: get the default number of toc segments to return for a given toc type :)
-declare function ctsx:getTocSize($a_type) as xs:int
-{
-  if ($ctsx:tocChunking[@type = $a_type])
-  then xs:int($ctsx:tocChunking[@type = $a_type]/@size)
-  else 1
-};
-
-(:
   ctsx:_extractPassage - recursive function to extract passage
     $a_base - base node
     $a_path1 - starting path of subpassage to extract
@@ -1222,11 +934,11 @@ declare function ctsx:_extractPassage(
   let $step2 := fn:head($a_path2)
   let $n1 :=
     if (fn:exists($a_path1) and fn:exists($step1))
-    then util:eval("$a_base/" || $step1)
+    then util:eval("$a_base/" || $step1, true())
     else ()
   let $n2 :=
     if (fn:exists($a_path2) and fn:exists($step2))
-    then util:eval("$a_base/" || $step2)
+    then util:eval("$a_base/" || $step2, true())
     else ()
 
   return
@@ -1234,7 +946,7 @@ declare function ctsx:_extractPassage(
     if ($n1 is $n2)
     then
       (: build subnode and recurse :)
-      element { fn:node-name($n1) }
+      element { "tei:" || fn:node-name($n1) }
       {
         $n1/@*,
         ctsx:_extractPassage($n1, fn:tail($a_path1), fn:tail($a_path2))
@@ -1243,7 +955,7 @@ declare function ctsx:_extractPassage(
     else if (fn:exists($n1) and fn:empty($step2))
     then
     (
-      element { fn:node-name($n1) }
+      element { "tei:" || fn:node-name($n1) }
       {
         $n1/@*,
         ctsx:_extractPassage($n1, fn:tail($a_path1), ())
@@ -1256,7 +968,7 @@ declare function ctsx:_extractPassage(
     (
       (: MarkLogic seems to evaluate ">> $n2" much faster than "<< $n2" :)
       $a_base/node()[fn:not(. >> $n2) and fn:not(. is $n2)],
-      element { fn:node-name($n2) }
+      element { "tei:" || fn:node-name($n2) }
       {
         $n2/@*,
         ctsx:_extractPassage($n2, (), fn:tail($a_path2))
@@ -1267,7 +979,7 @@ declare function ctsx:_extractPassage(
     then
     (
       (: take all children of start from subnode on :) 
-      element { fn:node-name($n1) }
+      element { "tei:" || fn:node-name($n1) }
       {
         $n1/@*,
         ctsx:_extractPassage($n1, fn:tail($a_path1), ())
@@ -1275,7 +987,7 @@ declare function ctsx:_extractPassage(
       (: take everything in between the nodes :)
       $a_base/node()[($n1 << .) and fn:not(. >> $n2) and fn:not(. is $n2)],
       (: take all children of end up to subnode :)
-      element { fn:node-name($n2) }
+      element { "tei:" || fn:node-name($n2) }
       {
         $n2/@*,
         ctsx:_extractPassage($n2, (), fn:tail($a_path2))
@@ -1285,8 +997,7 @@ declare function ctsx:_extractPassage(
     else ()
 };
 
-declare function ctsx:extractPassage($a_inv, $a_urn)
-{
+declare %private function ctsx:preparePassage($a_inv, $a_urn) {
   let $cts := ctsx:parseUrn($a_inv,$a_urn)
   let $doc := fn:doc($cts/fileInfo/fullPath)
   let $level1 := fn:count($cts/passageParts/rangePart[1]/part)
@@ -1325,73 +1036,30 @@ declare function ctsx:extractPassage($a_inv, $a_urn)
     )
 
   (: find passage start and end nodes in doc :)
-  let $n1 := util:eval("$doc" || $xpath1)
-  let $n2 := util:eval("$doc" || $xpath2)
+  let $n1 := util:eval("$doc" || $xpath1, true())
+  let $n2 := util:eval("$doc" || $xpath2, true())
 
   (: end node must not precede start node :)
   let $_ :=
     if ($n2 << $n1)
     then fn:error(xs:QName("BAD-RANGE"), "Endpoints out of order: " || $a_urn)
     else ()
+  
+  return ($doc, $xpath1, $xpath2, $cts, $entry, $cites)
+};
 
-  return
-    (: extract full passage :)
+declare %private function ctsx:_extractPassageLoop($passage) {
     ctsx:_extractPassage(
-      $doc,
-      fn:tail(fn:tokenize($xpath1, "/")),
-      fn:tail(fn:tokenize($xpath2, "/"))
+      $passage[1],
+      fn:tail(fn:tokenize($passage[2], "/")),
+      fn:tail(fn:tokenize($passage[3], "/"))
     )
 };
 
-(:
-  Recursive function to get the list of valid URNs for a getValidReff request
-  Parameters:
-    $a_node - base node in target document
-    $a_urn - the base urn
-    $a_sep - separator between base URN and remainder of URN
-    $a_steps - XPath steps for each level
-    $a_ids - id attributes for each level
-    $a_startVals - components of start of URN passage
-    $a_endVals - components of end of URN passage
-
-  Return value:
-    enumeration of URNs
-:)
-declare %private function ctsx:_getUrns(
-  $a_node as node(),
-  $a_urn as xs:string,
-  $a_sep as xs:string,
-  $a_steps as xs:string*,
-  $a_ids as xs:string*,
-  $a_startVals as xs:string*,
-  $a_endVals as xs:string*
-) as xs:string*
+declare function ctsx:extractPassage($a_inv, $a_urn)
 {
-  if (fn:empty($a_steps)) then $a_urn else
-
-  let $step := fn:head($a_steps)
-  let $path := "$a_node" || $step
-  let $nodes := util:eval("$a_node" || $step)
-  let $idVals := util:eval("$nodes/" || fn:head($a_ids))
-  let $start :=
-    if (fn:exists($a_startVals))
-    then fn:index-of($idVals, fn:head($a_startVals))
-    else 1
-  let $end :=
-    if (fn:exists($a_endVals))
-    then fn:index-of($idVals, fn:head($a_endVals))
-    else fn:count($idVals)
-  let $numNodes := ($end - $start) + 1
-
-  for $node at $i in fn:subsequence($nodes, $start, $numNodes)
+  let $passage := ctsx:preparePassage($a_inv, $a_urn)
   return
-    ctsx:_getUrns(
-      $node,
-      $a_urn || $a_sep || $idVals[$start + $i - 1],
-      ".",
-      fn:tail($a_steps),
-      fn:tail($a_ids),
-      if ($i eq 1) then fn:tail($a_startVals) else (),
-      if ($i eq $numNodes) then fn:tail($a_endVals) else ()
-    )
+    (: extract full passage :)
+    ctsx:_extractPassageLoop($passage)
 };

@@ -25,8 +25,6 @@ import module namespace ctsx = "http://alpheios.net/namespaces/cts"
        at "cts.xquery";
 import module namespace ctsi = "http://alpheios.net/namespaces/cts-implementation"
        at "cts-impl.xquery";
-import module namespace tan  = "http://alpheios.net/namespaces/text-analysis"
-       at "textanalysis-utils.xquery";
 import module namespace console = "http://exist-db.org/xquery/console";
 (:  :import module namespace map = "http://www.w3.org/2005/xpath-functions/map"; :)
 
@@ -49,46 +47,27 @@ let $e_query :=
   else if ($query = 'getvalidreff') then "GetValidReff"
 
 (: GetFirstUrn, GetPrevNextUrn, GetLabel, GetPassage or GetPassagePlus. :)
-
-  else if ($query = 'getexpandedtitle') then "GetExpandedTitle"
   else if ($query = 'getpassage') then "GetPassage"
-  else if ($query = 'expandvalidreffs') then "ExpandValidReffs"
   else if ($query = 'getpassageplus') then "GetPassagePlus"
-  else if ($query = 'getcitabletext') then "GetCitableText"
-  else if ($query = 'parseurn') then "ParseURN"
   else $e_query
 
 let $reply :=
 try
 {
   if ($query = 'getcapabilities')
-  then ctsx:getCapabilities($e_inv)
+  then ctsx:getCapabilities($e_inv, $e_urn)
   else if ($query = 'getvalidreff')
   then ctsx:getValidReff($e_inv, $e_urn, $e_level)
-  else if ($query = "getcatalogentry")
-  then ctsx:getCatalogEntry(ctsx:parseUrn($e_inv, $e_urn))
-  else if ($query = 'getexpandedtitle')
-  then ctsx:getExpandedTitle($e_inv, $e_urn)
   else if ($query = 'getpassage')
   then ctsx:getPassage($e_inv, $e_urn)
-  else if ($query = 'expandvalidreffs')
-  then ctsx:expandValidReffs($e_inv, $e_urn, $e_level)
+  else if ($query = 'getfirsturn')
+  then () (: GetFirstUrn :)
+  else if ($query = 'getprevnexturn')
+  then () (: GetPrevNextUrn :)
+  else if ($query = 'getlabel')
+  then () (: GetLabel :)
   else if ($query = 'getpassageplus')
   then ctsx:getPassagePlus($e_inv, $e_urn)
-  else if ($query = 'getcitabletext')
-  then
-    if (fn:exists($e_urn) and ctsx:isUnderCopyright($e_inv, $e_urn))
-    then
-      fn:error(xs:QName("COPYRIGHT"), "Copyright restricted")
-    else
-      ctsx:getCitableText($e_inv, $e_urn)
-  else if ($query = 'parseurn')
-  then
-    if ($e_urn)
-    then
-      let $map := mapsutils:put($map, "cts", ctsx:parseUrn($e_inv, $e_urn))
-      return map:get($map, "cts")
-    else ()
   else
     fn:error(
       xs:QName("INVALID-REQUEST"),
@@ -100,6 +79,8 @@ try
     <message>{ $err:description }</message>
     <value>{ $err:value }</value>
     <code>{ $err:code }</code>
+    <position>l {$err:line-number}, c {$err:column-number}</position>
+    <stack>{$err:additional}</stack>
   </CTS:CTSError>
 }
 
@@ -143,8 +124,6 @@ let $response :=
       if ($query =
           (
             "getcapabilities",
-            "getcitabletext",
-            "getexpandedtitle",
             "getpassage",
             "getvalidreff"
           ))
@@ -164,8 +143,7 @@ let $response :=
           {
             element tei:TEI { $reply//*:TEI/* }
           },
-          $reply//CTS:prevnext,
-          $reply//subref
+          $reply//CTS:prevnext
         )
         else if ($query = "getvalidreff")
         then
