@@ -337,7 +337,9 @@ declare function ctsx:getPassage(
   element CTS:reply
   {
     element CTS:urn { $a_urn },
-    ctsx:extractPassage($a_inv, $a_urn)
+    element CTS:passage {
+        ctsx:extractPassage($a_inv, $a_urn)
+    }
   }
 };
 
@@ -681,25 +683,20 @@ declare function ctsx:getPassagePlus(
     let $urns := local:prevNextUrns($cts, 0, $reffs)
   
   return
-    <reply>
-      <TEI>
-          {
-            $doc//*:teiHeader,$doc//*:teiheader
-          }
-        <text>
-          {$passage}
-        </text>
-      </TEI>
+    element CTS:reply {
+      element CTS:urn { $a_urn },
+      element CTS:label {
+        namespace ti { "http://chs.harvard.edu/xmlns/cts" },
+        ctsx:getLabel($a_inv, $a_urn)/child::element()
+      },
+      element CTS:passage {
+        $passage
+      },
+      element CTS:prevnext
       {
-        if ($passage)
-        then
-          element CTS:prevnext
-          {
-            $urns
-          }
-        else ()
+        $urns
       }
-    </reply>
+    }
 };
 
 (:
@@ -1096,10 +1093,101 @@ declare %private function local:prevNextUrns(
             return ($s, $e)
     return (
         element CTS:prev {
-            ctsx:mergeUrns($prevFirstUrn)
+            element CTS:urn { ctsx:mergeUrns($prevFirstUrn) }
         },
         element CTS:next {
-            ctsx:mergeUrns($nextFirstUrn)
+            element CTS:urn { ctsx:mergeUrns($nextFirstUrn) }
         }
     )
+};
+
+declare function ctsx:getLabel(
+    $a_inv as xs:string*,
+    $a_urn as xs:string
+) {
+
+  let $inv :=
+    if ($a_inv)
+    then $a_inv
+    else $ctsx:defaultInventory
+    
+  let $urn := string-join(subsequence(tokenize($a_urn, ":"), 1, 4), ":")
+    
+  let $inventoryRecord := collection("/db/repository")//ti:TextInventory[@tiid=$inv]//element()[@urn=$urn]
+  
+  return element CTS:reply
+  {
+    namespace ti { "http://chs.harvard.edu/xmlns/cts" },
+    element CTS:label {
+        local:labelLoop($inventoryRecord)
+    }
+  }
+};
+
+declare function ctsx:getFirstUrn(
+    $a_inv as xs:string*,
+    $a_urn as xs:string
+) {
+
+  let $inv :=
+    if ($a_inv)
+    then $a_inv
+    else $ctsx:defaultInventory
+    
+  let $cts := ctsx:parseUrn($inv, $a_urn)
+  let $nparts := fn:count($cts/passageParts/rangePart[1]/part)
+  let $reffs := ctsx:getValidUrns($inv, $cts/versionUrn/text(), $nparts + 1, false()) 
+  let $startWith :=
+    if ($nparts = 0)
+    then $cts/urn/text() || ":"
+    else $cts/urn/text() || "."
+    
+  return element CTS:reply
+  {
+    element CTS:urn {
+        $reffs[contains(./text(), $startWith)][1]/text()
+    }
+  }
+};
+
+declare %private function local:labelLoop(
+    $a_node as element()
+) {
+    if($a_node/local-name() = ("edition", "translation"))
+    then 
+        (
+            local:labelLoop($a_node/ancestor::ti:work),
+            for $desc in $a_node/ti:description
+                return element ti:version {
+                    $desc/@*,
+                    $desc/text()
+                }
+            ,
+            element ti:citation {
+                string-join($a_node//ti:citation/@label, ", ")
+            }
+        )
+    else if($a_node/local-name() = "work")
+    then 
+        (
+            local:labelLoop($a_node/ancestor::ti:textgroup),
+            for $title in $a_node/ti:title
+                return element ti:title {
+                    $title/@*,
+                    $title/text()
+                },
+            element ti:work {
+                xs:string($a_node/@urn)
+            }
+        )
+    else  if($a_node/local-name() = "textgroup")
+    then 
+        (
+            for $title in $a_node/ti:groupname
+                return element ti:groupname {
+                    $title/@*,
+                    $title/text()
+                }
+        )
+    else ()
 };

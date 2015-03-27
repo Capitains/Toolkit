@@ -38,6 +38,7 @@ let $_ := ctsi:add-response-header("Access-Control-Allow-Origin", "*")
 let $e_query := ctsi:get-request-parameter("request", ())
 let $e_urn :=  ctsi:get-request-parameter("urn", ())
 let $e_level := xs:int(ctsi:get-request-parameter("level", "1"))
+let $e_context := xs:int(ctsi:get-request-parameter("context", "0"))
 let $e_uuid := ctsi:get-request-parameter("xuuid", ())
 let $e_xinv := ctsi:get-request-body()
 let $e_inv := ctsi:get-request-parameter("inv", $ctsx:defaultInventory)
@@ -61,11 +62,11 @@ try
   else if ($query = 'getpassage')
   then ctsx:getPassage($e_inv, $e_urn)
   else if ($query = 'getfirsturn')
-  then () (: GetFirstUrn :)
+  then ctsx:getFirstUrn($e_inv, $e_urn) (: GetFirstUrn :)
   else if ($query = 'getprevnexturn')
   then ctsx:getPrevNextUrn($e_inv, $e_urn) (: GetPrevNextUrn :)
   else if ($query = 'getlabel')
-  then () (: GetLabel :)
+  then ctsx:getLabel($e_inv, $e_urn) (: GetLabel :)
   else if ($query = 'getpassageplus')
   then ctsx:getPassagePlus($e_inv, $e_urn)
   else
@@ -92,6 +93,7 @@ let $response :=
   else
     element { "CTS:" || $e_query }
     {
+      namespace tei { "http://www.tei-c.org/ns/1.0" },
       element CTS:request
       {
         attribute elapsed-time { string(seconds-from-duration(util:system-time() - $startTime) * 1000) },
@@ -125,7 +127,8 @@ let $response :=
           (
             "getcapabilities",
             "getpassage",
-            "getvalidreff"
+            "getvalidreff",
+            "getpassageplus"
           ))
       then
         $reply
