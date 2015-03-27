@@ -63,7 +63,7 @@ try
   else if ($query = 'getfirsturn')
   then () (: GetFirstUrn :)
   else if ($query = 'getprevnexturn')
-  then () (: GetPrevNextUrn :)
+  then ctsx:getPrevNextUrn($e_inv, $e_urn) (: GetPrevNextUrn :)
   else if ($query = 'getlabel')
   then () (: GetLabel :)
   else if ($query = 'getpassageplus')

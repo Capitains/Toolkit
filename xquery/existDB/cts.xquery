@@ -662,85 +662,23 @@ declare function ctsx:getPassagePlus(
   $a_withSiblings as xs:boolean*
 )
 {
-  let $passageInfos := ctsx:preparePassage($a_inv, $a_urn)
-  let $doc := $passageInfos[1]
-  let $xpath1 := $passageInfos[2]
-  let $xpath2 := $passageInfos[3]
-  let $cts := $passageInfos[4]
-  let $entry := $passageInfos[4]
-  let $cite := $passageInfos[4]
-  
-  let $level := fn:count($cts/passageParts/rangePart[1]/part)
-  
-  let $passageFull := <container>{ctsx:_extractPassageLoop($passageInfos)}</container>
-  let $passage := $passageFull//*:body
-  
-  let $count := count($cts/passageParts/rangePart[1]/part)
-  let $reffs := ctsx:getValidUrns($a_inv, $cts/versionUrn, $count, false())
-  
-  let $startUrn   := $cts/versionUrn || ":" || fn:string-join($cts/passageParts/rangePart[1]/part, ".")
-  let $startReff  := $reffs[./text() = $startUrn]
-  let $startIndex := index-of($reffs, $startReff)
-  
-  let $endReff := 
-    if (count($cts/passageParts/rangePart[2]/part) = $count)
-    then 
-      let $endUrn := $cts/versionUrn || ":" || fn:string-join($cts/passageParts/rangePart[2]/part, ".")
-      return $reffs[./text() = $endUrn]
-    else ()
-
-   let $endIndex :=
-      if ($endReff)
-      then
-          index-of($reffs, $endReff)
-      else
-          $endReff
-        
+    let $passageInfos := ctsx:preparePassage($a_inv, $a_urn)
+    let $doc := $passageInfos[1]
+    let $xpath1 := $passageInfos[2]
+    let $xpath2 := $passageInfos[3]
+    let $cts := $passageInfos[4]
+    let $entry := $passageInfos[4]
+    let $cite := $passageInfos[4]
     
-    let $refCount := $endIndex - $startIndex + 1
+    let $level := fn:count($cts/passageParts/rangePart[1]/part)
     
-    let $prevMinusRef := 
-        if ($startIndex - $refCount <= 1)
-        then
-            1
-        else
-            $startIndex - $refCount
-            
-    let $countUrns := count($reffs)
-    let $nextEndRef := 
-        if ($endIndex + $refCount >= $countUrns)
-        then
-            $countUrns
-        else
-            $endIndex + $refCount
-            
-    let $prevFirstUrn :=
-        if ($prevMinusRef <= 1 and $startIndex = 1)
-        then
-            ()
-        else
-            let $s := $reffs[$prevMinusRef]/text()
-            let $e :=
-                if($prevMinusRef + $refCount >= $startIndex)
-                then
-                    $reffs[$startIndex - 1]/text()
-                else
-                    $reffs[$prevMinusRef + $refCount]/text()
-                    
-            return ($s, $e)
-            
-    let $nextFirstUrn :=
-        if ($endIndex >= $countUrns)
-        then
-            ()
-        else
-            let $s := $reffs[$endIndex + 1]/text()
-            let $e := $reffs[$nextEndRef]/text()
-                    
-            return ($s, $e)
-            
-    let $prev := ctsx:mergeUrns($prevFirstUrn)
-    let $next := ctsx:mergeUrns($nextFirstUrn)
+    let $passageFull := <container>{ctsx:_extractPassageLoop($passageInfos)}</container>
+    let $passage := $passageFull//*:body
+    
+    let $count := count($cts/passageParts/rangePart[1]/part)
+    let $reffs := ctsx:getValidUrns($a_inv, $cts/versionUrn, $count, false())
+    
+    let $urns := local:prevNextUrns($cts, 0, $reffs)
   
   return
     <reply>
@@ -757,14 +695,7 @@ declare function ctsx:getPassagePlus(
         then
           element CTS:prevnext
           {
-            element CTS:prev
-            {
-              $prev
-            },
-            element CTS:next
-            {
-              $next
-            }
+            $urns
           }
         else ()
       }
@@ -895,7 +826,6 @@ declare %private function ctsx:_rbv
 :)
 declare function ctsx:getCatalogEntry($a_cts) as node()*
 {
-    console:log(("cts", $a_cts, "end")),
   let $version :=
     //(ti:edition|ti:translation)
       [@workUrn eq $a_cts/workUrn]
@@ -1062,4 +992,114 @@ declare function ctsx:extractPassage($a_inv, $a_urn)
   return
     (: extract full passage :)
     ctsx:_extractPassageLoop($passage)
+};
+
+declare function ctsx:getPrevNextUrn(
+    $a_inv as xs:string*,
+    $a_urn as xs:string
+) {
+
+  let $inv :=
+    if ($a_inv)
+    then $a_inv
+    else $ctsx:defaultInventory
+    
+
+  let $cts := ctsx:parseUrn($inv, $a_urn)
+  let $nparts := fn:count($cts/passageParts/rangePart[1]/part)
+  
+  let $reffs := ctsx:getValidUrns($inv, $cts/versionUrn/text(), $nparts, false()) 
+  let $urns  := local:prevNextUrns($cts, 0, $reffs)
+  
+  return element CTS:reply
+  {
+    element CTS:prevnext {
+        $urns
+    }
+  }
+};
+
+declare %private function local:prevNextUrns(
+    $cts as element()*, (: CTS from prepare passage for example :)
+    $amount as xs:integer, (: Number of nodes to select (overrides urns differences), if amout is 0 it is computed according to urns diff or 0 :)
+    $reffs as element()* (: Sequence of urn elements :)
+) {
+
+    let $parts1 := $cts/passageParts/rangePart[1]/part
+    let $startUrn := $cts/versionUrn || ":" || fn:string-join($parts1/text(), ".")
+    let $endUrn := 
+        if (count($cts/passageParts/rangePart[2]/part) = count($parts1))
+        then 
+          let $endUrn := $cts/versionUrn || ":" || fn:string-join($cts/passageParts/rangePart[2]/part, ".")
+          return $reffs[./text() = $endUrn]
+        else ()
+    
+    let $startReff  := $reffs[./text() = $startUrn]
+    let $startIndex := index-of($reffs, $startReff)
+    
+    (: We get the index of the endUrn :)
+    let $endIndex :=
+      if ($endUrn)
+      then
+          index-of($reffs, $endUrn)
+      else
+          $endUrn
+        
+    (: We compute the context we want :)
+    let $refCount := 
+        if($amount = 0)
+        then 
+            if ($endUrn)
+            then $endIndex - $startIndex + 1
+            else 1
+        else
+            1
+    
+    let $prevMinusRef := 
+        if ($startIndex - $refCount <= 1)
+        then
+            1
+        else
+            $startIndex - $refCount
+            
+    let $countUrns := count($reffs)
+    let $nextEndRef := 
+        if ($endIndex + $refCount >= $countUrns)
+        then
+            $countUrns
+        else
+            $endIndex + $refCount
+            
+    let $prevFirstUrn :=
+        if ($prevMinusRef <= 1 and $startIndex = 1)
+        then
+            ()
+        else
+            let $s := $reffs[$prevMinusRef]/text()
+            let $e :=
+                if($prevMinusRef + $refCount >= $startIndex)
+                then
+                    $reffs[$startIndex - 1]/text()
+                else
+                    $reffs[$prevMinusRef + $refCount]/text()
+                    
+            return ($s, $e)
+            
+    let $nextFirstUrn :=
+        if ($endIndex >= $countUrns)
+        then
+            ()
+        else
+            let $s := $reffs[$endIndex + 1]/text()
+            let $e := $reffs[$nextEndRef]/text()
+                    
+            return ($s, $e)
+    return (
+        element CTS:prev {
+            ctsx:mergeUrns($prevFirstUrn)
+        },
+        element CTS:next {
+            ctsx:mergeUrns($nextFirstUrn)
+        }
+    )
 };
