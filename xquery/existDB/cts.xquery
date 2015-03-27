@@ -99,7 +99,7 @@ declare %private function local:fake-match-document(
                     local:fake-match-document($nextLevel, $next, $master, $urn, ($parents, string($master/@n)), $xpath)
                     
              return (
-              element ti:urn {
+              element urn {
                  attribute level { $level },
                  $urn || ":" || string-join(($parents, string($master/@n)), ".")
               },
@@ -583,7 +583,7 @@ declare %private function local:use-fake-document-cache(
     let $doc := doc($collection || "/" || $filename)
     return
         if ($doc)
-        then $doc/reff/ti:urn
+        then $doc/reff/urn
         else
             let $response := local:fake-match-document(
                                 $level,
