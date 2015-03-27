@@ -123,42 +123,7 @@ let $response :=
             xs:string($la)
           }
       },
-      if ($query =
-          (
-            "getcapabilities",
-            "getpassage",
-            "getvalidreff",
-            "getpassageplus"
-          ))
-      then
-        $reply
-      else
-      element CTS:reply
-      {
-        (: hack to get validating response for ctsx:GetPassagePlus without fixing all the code
-           which currently relies on the invalid response  - needs to move in to the cts.xquery
-           library
-         :)
-        if ($query = "getpassageplus")
-        then
-        (
-          element CTS:passage
-          {
-            element tei:TEI { $reply//*:TEI/* }
-          },
-          $reply//CTS:prevnext
-        )
-        else if ($query = "getvalidreff")
-        then
-          $reply
-        else
-          $reply/node()
-      }
+    $reply
     }
 
-return
-  element { fn:name($response) }
-  {
-    $response/@*,
-    $response/*
-  }
+return $response
