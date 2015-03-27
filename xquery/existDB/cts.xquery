@@ -580,10 +580,10 @@ declare %private function local:use-fake-document-cache(
     (: replace this with a unique file name with a sequence number :)
     let $docHash := util:hash($body, "md5")
     let $filename :=  $docHash || ".xml" 
-    let $doc := doc($collection || "/" || $filename)
+    let $doc := doc($collection || "/" || $filename)//urn
     return
         if ($doc)
-        then $doc/reff/urn
+        then $doc
         else
             let $response := local:fake-match-document(
                                 $level,
