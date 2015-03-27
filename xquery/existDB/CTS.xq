@@ -46,10 +46,11 @@ let $query := fn:lower-case($e_query)
 let $e_query :=
   if ($query = 'getcapabilities') then "GetCapabilities"
   else if ($query = 'getvalidreff') then "GetValidReff"
-
-(: GetFirstUrn, GetPrevNextUrn, GetLabel, GetPassage or GetPassagePlus. :)
   else if ($query = 'getpassage') then "GetPassage"
   else if ($query = 'getpassageplus') then "GetPassagePlus"
+  else if ($query = 'getfirsturn') then "GetFirstUrn"
+  else if ($query = 'getprevnexturn') then "GetPrevNextUrn"
+  else if ($query = 'getlabel') then "GetLabel"
   else $e_query
 
 let $reply :=
