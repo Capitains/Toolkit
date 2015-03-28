@@ -473,20 +473,10 @@ declare function ctsx:getCapabilities($a_inv, $a_namespaceUrn, $a_groupUrn, $a_w
 :)
 declare function ctsx:getValidReff($a_inv, $a_urn) as element(CTS:reply)
 {
-  let $cts := ctsx:parseUrn($a_inv, $a_urn)
-  let $entry := ctsx:getCatalogEntry($cts)
-  
-  let $nparts := fn:count($cts/passageParts/rangePart[1]/part)
-  return
     ctsx:getValidReff(
       $a_inv,
       $a_urn,
-      (: if one or more parts of the passage component are specified, the level is implicitly
-         the next level after the one supplied, otherwise retrieve all levels
-      :)
-      if ($nparts ge 1)
-      then $nparts + 1
-      else fn:count($entry/ti:online//ti:citation)
+      1
     )
 };
 
@@ -496,10 +486,31 @@ declare function ctsx:getValidReff(
   $a_level as xs:int
 ) as element(CTS:reply)
 {
+  let $cts := ctsx:parseUrn($a_inv, $a_urn)
+  let $entry := ctsx:getCatalogEntry($cts)
+  
+  let $nparts := fn:count($cts/passageParts/rangePart[1]/part)
+  let $level := 
+    if ($nparts > 0)
+    then 
+        $nparts + 1
+    else
+      if($a_level > 0)
+      then $a_level
+      else
+        fn:count($entry/ti:online//ti:citation)
+  
+  let $reffs := ctsx:getValidUrns($a_inv, $cts/versionUrn/text(), $level)
+  return
   element CTS:reply
   {
     element CTS:reff { 
-        ctsx:getValidUrns($a_inv, $a_urn, $a_level) 
+        attribute level { $level },
+        if (count(tokenize($a_urn, ":")) > 4)
+        then
+            $reffs[starts-with(./text(), $cts/urn/text()||".")]
+        else
+            $reffs
     }
   }
 };
