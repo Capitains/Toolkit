@@ -989,8 +989,8 @@ declare %private function ctsx:preparePassage($a_inv, $a_urn) {
 declare %private function ctsx:_extractPassageLoop($passage) {
     ctsx:_extractPassage(
       $passage[1],
-      fn:tail(fn:tokenize($passage[2], "/")),
-      fn:tail(fn:tokenize($passage[3], "/"))
+      fn:tail(fn:tokenize($passage[2], "/+")),
+      fn:tail(fn:tokenize($passage[3], "/+"))
     )
 };
 
