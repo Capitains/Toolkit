@@ -32,6 +32,58 @@ The CTS 5 XQuery CTS API code generates a TextInventory for the repo on the fly,
 
 The RefsDecl in the teiHeader of the TEI XML files must accurately represent the canonical citation scheme of the document. If we use the [cRefPattern](http://www.tei-c.org/release/doc/tei-p5-doc/en/html/ref-cRefPattern.html) syntax for this element to define the Xpaths and citation mapping patterns it should allow us to be able to automatically contruct the CTS citationMapping components of the CTS TextInventory for any given text.
 
+Example from http://www.tei-c.org/release/doc/tei-p5-doc/en/html/SA.html#SACR:
+
+```
+<refsDecl xml:id="biblical">
+ <cRefPattern matchPattern="(.+) (.+):(.+)"
+  replacementPattern="#xpath(//div[@n='$1']/div[$2]/div[$3])">
+  <p>This pointer pattern extracts and references the <q>book,</q>
+   <q>chapter,</q> and <q>verse</q> parts of a biblical reference.</p>
+ </cRefPattern>
+ <cRefPattern matchPattern="(.+) (.+)"
+  replacementPattern="#xpath(//div[@n='$1']/div[$2])">
+  <p>This pointer pattern extracts and references the <q>book</q> and
+  <q>chapter</q> parts of a biblical reference.</p>
+ </cRefPattern>
+ <cRefPattern matchPattern="(.+)"
+  replacementPattern="#xpath(//div[@n='$1'])">
+  <p>This pointer pattern extracts and references just the <q>book</q>
+     part of a biblical reference.</p>
+ </cRefPattern>
+</refsDecl>
+```
+
+So example for e.g. Homer Iliad:
+
+Citation Mapping:
+
+```
+ <citationMapping>
+                        <citation label="Book" xpath="/div1[@n='?']" scope="/TEI.2/text/body">
+                            <citation label="Line" xpath="//l[@n='?']"
+                                scope="/TEI.2/text/body/div1[@n='?']"/>
+                        </citation>
+                    </citationMapping>
+
+```
+
+And as CREF
+
+```
+<refsDecl xml:id="bookline">
+ <cRefPattern matchPattern="(.+).(.+)"
+  replacementPattern="#xpath(/TEI.2/text/body/div[@n='$1']//l[@n='$2'])">
+  <p>This pointer pattern extracts book and line</p>
+ </cRefPattern>
+ <cRefPattern matchPattern="(.+)"
+  replacementPattern="#xpath(/TEI.2/text/body/div[@n='$1'])">
+  <p>This pointer pattern extracts book and line.</p>
+ </cRefPattern>
+</refsDecl>
+```
+
+
 I think ideally, a CTS API implementation should be able to work with both a traditional full CTS inventory, as well as with directory structure conventions, metadata fragments, and the TEI RefsDecl header. There are several reasons for supporting the naming convention/metadata fragment approach:
 
 1. As the number of texts increases, a single large XML file containing the entire inventory becomes unmanageable
