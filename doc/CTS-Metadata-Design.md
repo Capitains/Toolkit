@@ -71,14 +71,14 @@ Citation Mapping:
 And as CREF
 
 ```
-<refsDecl xml:id="bookline">
+<refsDecl xml:id="CTS">
  <cRefPattern matchPattern="(.+).(.+)"
   replacementPattern="#xpath(/TEI.2/text/body/div[@n='$1']//l[@n='$2'])">
   <p>This pointer pattern extracts book and line</p>
  </cRefPattern>
  <cRefPattern matchPattern="(.+)"
   replacementPattern="#xpath(/TEI.2/text/body/div[@n='$1'])">
-  <p>This pointer pattern extracts book and line.</p>
+  <p>This pointer pattern extracts book.</p>
  </cRefPattern>
 </refsDecl>
 ```
